@@ -149,7 +149,14 @@
     color:var(--pink-dark); -webkit-text-stroke:2px var(--ink); pointer-events:none; z-index:20;
   }
 
-  footer{margin-top:34px; font-size:12px; font-weight:600; color:var(--ink); opacity:0.55; z-index:2; text-align:center;}
+  .sound-toggle{
+    margin-top:14px; display:inline-flex; align-items:center; gap:6px;
+    font-weight:800; font-size:12px; color:var(--ink); opacity:0.65;
+    background:none; border:none; cursor:pointer; padding:4px 8px;
+  }
+  .sound-toggle:hover{opacity:0.9;}
+
+  footer{margin-top:20px; font-size:12px; font-weight:600; color:var(--ink); opacity:0.55; z-index:2; text-align:center;}
 
   @media (prefers-reduced-motion: reduce){
     .float{animation:none !important;}
@@ -261,6 +268,7 @@
 
   <button class="hit-btn" id="hitBtn">Hit Faraz with hammer</button>
   <p class="caption" id="caption">waiting for a bonk...</p>
+  <button class="sound-toggle" id="soundToggle" aria-pressed="true">🔊 sound on</button>
 </div>
 
 <footer>made for Faraz, one bonk at a time</footer>
@@ -272,13 +280,107 @@
   const hitBtn = document.getElementById('hitBtn');
   const hitCount = document.getElementById('hitCount');
   const caption = document.getElementById('caption');
+  const soundToggle = document.getElementById('soundToggle');
 
   const powWords = ['BONK!', 'OW!', 'OOF!', 'YIKES!', 'BOP!'];
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   let hits = 0;
   let hideTimer = null;
+  let soundOn = true;
 
+  // ---------- Audio (synthesized, no external files) ----------
+  let audioCtx = null;
+  function getAudioCtx(){
+    if(!audioCtx){
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if(!Ctx) return null;
+      audioCtx = new Ctx();
+    }
+    if(audioCtx.state === 'suspended'){
+      audioCtx.resume();
+    }
+    return audioCtx;
+  }
+
+  function playBonk(){
+    if(!soundOn) return;
+    const ctx = getAudioCtx();
+    if(!ctx) return;
+    const now = ctx.currentTime;
+
+    // low pitched "thonk" body
+    const osc = ctx.createOscillator();
+    const oscGain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(190, now);
+    osc.frequency.exponentialRampToValueAtTime(48, now + 0.13);
+    oscGain.gain.setValueAtTime(0.0001, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.9, now + 0.008);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+    osc.connect(oscGain);
+    oscGain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.26);
+
+    // short filtered noise burst for impact "crack"
+    const bufferSize = Math.floor(ctx.sampleRate * 0.1);
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for(let i = 0; i < bufferSize; i++){
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2);
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+    const noiseFilter = ctx.createBiquadFilter();
+    noiseFilter.type = 'lowpass';
+    noiseFilter.frequency.setValueAtTime(1400, now);
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.45, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(ctx.destination);
+    noise.start(now);
+  }
+
+  function playCry(){
+    if(!soundOn) return;
+    const ctx = getAudioCtx();
+    if(!ctx) return;
+    const now = ctx.currentTime;
+
+    // two short wavering "ow" notes, descending
+    const notes = [
+      { start: 0,    f1: 540, f2: 400, dur: 0.16 },
+      { start: 0.19, f1: 470, f2: 320, dur: 0.22 }
+    ];
+
+    notes.forEach(n => {
+      const t0 = now + n.start;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(n.f1, t0);
+      osc.frequency.exponentialRampToValueAtTime(n.f2, t0 + n.dur);
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.28, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + n.dur);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + n.dur + 0.02);
+    });
+  }
+
+  soundToggle.addEventListener('click', () => {
+    soundOn = !soundOn;
+    soundToggle.textContent = soundOn ? '🔊 sound on' : '🔇 sound off';
+    soundToggle.setAttribute('aria-pressed', String(soundOn));
+    if(soundOn) getAudioCtx();
+  });
+
+  // ---------- Visuals ----------
   function captionFor(n){
     if(n === 0) return 'waiting for a bonk...';
     if(n <= 2) return "he's fine.";
@@ -339,6 +441,9 @@
   }
 
   function bonk(){
+    // unlock/resume audio synchronously within the click gesture
+    getAudioCtx();
+
     hits += 1;
     hitCount.textContent = hits;
     caption.textContent = captionFor(hits);
@@ -354,6 +459,8 @@
       character.classList.add('hit');
       if(!reduceMotion) squishCharacter();
       spawnPow();
+      playBonk();
+      setTimeout(playCry, 130);
 
       hideTimer = setTimeout(() => {
         character.classList.remove('hit');
